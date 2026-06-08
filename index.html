@@ -2056,9 +2056,9 @@ footer {
       <div class="pa-section-label">Informações de trabalho</div>
 
       <div class="pa-field">
-        <label class="pa-label">Posto / Função <span class="req">*</span></label>
+        <label class="pa-label">Posto / Função <span style="color:var(--muted);font-size:10px;font-weight:400">(opcional)</span></label>
         <select class="pa-input" id="pa-posto">
-          <option value="">Selecione o posto...</option>
+          <option value="">Selecione o posto (se souber)...</option>
         </select>
       </div>
 
@@ -7090,11 +7090,6 @@ async function finalizarCadastro() {
   el.classList.remove('show');
 
   const posto = document.getElementById('pa-posto').value.trim();
-  if (!posto) {
-    paShowError('Informe seu posto ou função.');
-    document.getElementById('pa-posto').classList.add('error');
-    return;
-  }
   document.getElementById('pa-posto').classList.remove('error');
 
   // Coletar todos os dados
