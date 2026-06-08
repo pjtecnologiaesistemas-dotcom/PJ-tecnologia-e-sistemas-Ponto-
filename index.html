@@ -3158,8 +3158,20 @@ function fazerLogin() {
   let usuariosLocal = [];
   try { usuariosLocal = JSON.parse(localStorage.getItem('ms_usuarios')) || []; } catch { usuariosLocal = []; }
 
-  // Merge: cache local + o que já está em memória (o maior vence)
-  const cacheBase = usuariosLocal.length >= usuarios.length ? usuariosLocal : usuarios;
+  // Merge COMPLETO: une memória + localStorage por ID — nunca perde nenhum usuário
+  const todosIds = new Set([...usuarios.map(u => u.id), ...usuariosLocal.map(u => u.id)]);
+  const cacheBase = [];
+  todosIds.forEach(id => {
+    // Prefere a versão mais recente (memória > localStorage, ambos confiáveis)
+    const daMem  = usuarios.find(u => u.id === id);
+    const doLocal = usuariosLocal.find(u => u.id === id);
+    cacheBase.push(daMem || doLocal);
+  });
+  // Garante que sempre há pelo menos o admin padrão como fallback
+  if (!cacheBase.find(u => u.login === 'admin')) {
+    const adminLocal = usuariosLocal.find(u => u.login === 'admin');
+    if (adminLocal) cacheBase.push(adminLocal);
+  }
 
   // Se offline ou Firebase não disponível → entra imediatamente via cache
   if (!navigator.onLine || !window._firebaseReady || !window._db) {
@@ -3190,12 +3202,23 @@ function fazerLogin() {
     loginResolvido = true;
     clearTimeout(timeoutSeguranca);
     const data = snap.val();
-    const lista = data ? fromFirebaseObj(data) : [];
-    if (lista.length) {
-      usuarios = lista;
+    const listaFb = data ? fromFirebaseObj(data) : [];
+    // MERGE: une Firebase + cache local para nunca perder usuários de nenhum lado
+    const idsFb = new Set(listaFb.map(u => u.id));
+    const locaisPendentes = cacheBase.filter(u => !idsFb.has(u.id));
+    const listaMerge = [...listaFb, ...locaisPendentes];
+    if (listaMerge.length) {
+      usuarios = listaMerge;
       localStorage.setItem('ms_usuarios', JSON.stringify(usuarios));
+      // Salva usuários locais pendentes no Firebase para não perder
+      if (locaisPendentes.length && window._db) {
+        locaisPendentes.forEach(u => {
+          window._fbSet(window._fbRef(window._db, 'usuarios/' + u.id), u)
+            .catch(e => console.warn('[Login] Sync usuario pendente:', e.message));
+        });
+      }
     }
-    tentarLogin(lista.length ? lista : cacheBase);
+    tentarLogin(listaMerge.length ? listaMerge : cacheBase);
   }).catch(() => {
     if (loginResolvido) return;
     loginResolvido = true;
@@ -3211,11 +3234,28 @@ function mostrarErroLogin(msg) {
   setTimeout(() => el.classList.remove('show'), 3500);
 }
 
+function garantirAdminNoFirebase(usuario) {
+  // Garante que o usuário admin (ou qualquer usuário logado) esteja no Firebase
+  // Isso corrige o caso onde o admin só existe no localStorage
+  if (!window._firebaseReady || !window._db) return;
+  window._fbGet(window._fbRef(window._db, 'usuarios/' + usuario.id)).then(snap => {
+    if (!snap.val()) {
+      // Admin não está no Firebase — salva agora
+      console.warn('[EntrarSistema] Usuário não encontrado no Firebase — salvando:', usuario.login);
+      window._fbSet(window._fbRef(window._db, 'usuarios/' + usuario.id), usuario)
+        .then(() => console.log('[EntrarSistema] Usuário sincronizado com Firebase:', usuario.login))
+        .catch(e => console.warn('[EntrarSistema] Erro ao sincronizar usuário:', e.message));
+    }
+  }).catch(() => {});
+}
+
 function entrarSistema(usuario) {
   document.getElementById('login-screen').style.display = 'none';
   document.getElementById('main-header').style.display = 'block';
   document.getElementById('main-content').style.display = 'block';
   document.getElementById('main-footer').style.display = 'block';
+  // Garante que este usuário existe no Firebase (corrige admin que só estava no localStorage)
+  setTimeout(() => garantirAdminNoFirebase(usuario), 2000);
 
   // Chip do usuário logado
   document.getElementById('chip-user-name').textContent = usuario.nome || usuario.login;
