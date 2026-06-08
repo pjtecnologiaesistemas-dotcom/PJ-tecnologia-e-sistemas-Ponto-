@@ -3004,8 +3004,13 @@ function loadData() {
       const data = snap.val();
       if (data) {
         clearTimeout(seedColabTimer);
-        // Firebase é a ÚNICA fonte da verdade — nunca sobrescreve com dado local
-        colaboradores = fromFirebaseObj(data);
+        // Firebase é a fonte da verdade — mas preserva itens locais ainda não chegaram ao Firebase
+        // (ex: colaborador recém-cadastrado via Primeiro Acesso que pode estar em trânsito)
+        const doFirebase = fromFirebaseObj(data);
+        // Merge: adiciona colaboradores locais que ainda não chegaram ao Firebase
+        const idsFirebase = new Set(doFirebase.map(c => c.id));
+        const locaisPendentes = colaboradores.filter(c => !idsFirebase.has(c.id));
+        colaboradores = [...doFirebase, ...locaisPendentes];
         localStorage.setItem('ms_colaboradores', JSON.stringify(colaboradores));
       } else if (!colabsCarregado) {
         // Firebase confirmou nó vazio na primeira leitura
@@ -3046,7 +3051,10 @@ function loadData() {
         clearTimeout(seedUserTimer);
         const lista = fromFirebaseObj(data);
         if (lista.length) {
-          usuarios = lista;
+          // Merge: preserva usuários locais ainda em trânsito para o Firebase
+          const idsFirebase = new Set(lista.map(u => u.id));
+          const locaisPendentes = usuarios.filter(u => !idsFirebase.has(u.id));
+          usuarios = [...lista, ...locaisPendentes];
           localStorage.setItem('ms_usuarios', JSON.stringify(usuarios));
           // Atualiza sessão se o usuário logado foi alterado no Firebase
           if (currentUser) {
@@ -7220,11 +7228,44 @@ async function finalizarCadastro() {
     primeiroAcesso: true
   };
 
-  // Salvar individualmente — nunca sobrescreve outros cadastros
+  // Salvar individualmente — aguarda Firebase se necessário
   colaboradores.push(novoColab);
   usuarios.push(novoUser);
-  saveUmColab(novoColab);
-  saveUmUsuario(novoUser);
+
+  // Salva no localStorage imediatamente (garante offline)
+  localStorage.setItem('ms_colaboradores', JSON.stringify(colaboradores));
+  localStorage.setItem('ms_usuarios', JSON.stringify(usuarios));
+
+  // Salva no Firebase — se ainda não estiver pronto, aguarda até 8s
+  function salvarNoFirebase() {
+    if (window._firebaseReady && window._db) {
+      // Salva colaborador e usuário individualmente no Firebase
+      window._fbSet(window._fbRef(window._db, 'colaboradores/' + novoColab.id), novoColab)
+        .then(() => console.log('[PrimeiroAcesso] Colaborador salvo no Firebase:', novoColab.nome))
+        .catch(e => console.warn('[PrimeiroAcesso] Erro ao salvar colaborador:', e.message));
+      window._fbSet(window._fbRef(window._db, 'usuarios/' + novoUser.id), novoUser)
+        .then(() => console.log('[PrimeiroAcesso] Usuário salvo no Firebase:', novoUser.login))
+        .catch(e => console.warn('[PrimeiroAcesso] Erro ao salvar usuário:', e.message));
+    } else {
+      // Firebase ainda não pronto — agenda para quando estiver
+      console.warn('[PrimeiroAcesso] Firebase não pronto — agendando salvamento...');
+      let tentativas = 0;
+      const retry = setInterval(() => {
+        tentativas++;
+        if (window._firebaseReady && window._db) {
+          clearInterval(retry);
+          window._fbSet(window._fbRef(window._db, 'colaboradores/' + novoColab.id), novoColab)
+            .catch(e => console.warn('[PrimeiroAcesso] Retry colab:', e.message));
+          window._fbSet(window._fbRef(window._db, 'usuarios/' + novoUser.id), novoUser)
+            .catch(e => console.warn('[PrimeiroAcesso] Retry user:', e.message));
+        } else if (tentativas >= 16) { // 8s
+          clearInterval(retry);
+          console.warn('[PrimeiroAcesso] Firebase indisponível — dados apenas no localStorage');
+        }
+      }, 500);
+    }
+  }
+  salvarNoFirebase();
 
   // Guardar para entrar automaticamente
   paNovoCadastro = novoUser;
@@ -7242,6 +7283,16 @@ function entrarComNovoCadastro() {
   document.getElementById('primeiro-acesso-screen').style.display = 'none';
   currentUser = paNovoCadastro;
   sessionStorage.setItem('ms_session', JSON.stringify(paNovoCadastro));
+  // Garante que o colaboradorId está corretamente definido na sessão
+  // (precisa para que loadData filtre o histórico corretamente)
+  if (!currentUser.colaboradorId) {
+    // Tenta encontrar o colaborador recém-criado em memória
+    const colab = colaboradores.find(c => c.nome === paNovoCadastro.nome);
+    if (colab) {
+      currentUser = { ...currentUser, colaboradorId: colab.id };
+      sessionStorage.setItem('ms_session', JSON.stringify(currentUser));
+    }
+  }
   entrarSistema(paNovoCadastro);
 }
 
