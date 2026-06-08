@@ -10,12 +10,9 @@
 <!-- Firebase SDK -->
 <script type="module">
   import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.0/firebase-app.js";
-  import { getDatabase, ref, push, set, onValue, remove, update, get }
+  import { getDatabase, ref, push, set, onValue, remove, update, get, goOnline }
     from "https://www.gstatic.com/firebasejs/10.12.0/firebase-database.js";
 
-  // ══════════════════════════════════════════════════════
-  //  🔧 SUBSTITUA AQUI COM SUAS CREDENCIAIS DO FIREBASE
-  // ══════════════════════════════════════════════════════
   const firebaseConfig = {
     apiKey: "AIzaSyD53cRufOrqFX_JNBlbTB-wiv7ARSDFbUY",
     authDomain: "pj-tecnologia-e-sistemas-ponto.firebaseapp.com",
@@ -26,26 +23,64 @@
     appId: "1:921604535351:web:716aa9bbd45cd57b8fbbb2"
   };
 
-  let db;
   try {
     const app = initializeApp(firebaseConfig);
-    db = getDatabase(app);
-    window._firebaseReady = true;
-    window._db = db;
-    window._fbRef = ref;
-    window._fbPush = push;
-    window._fbSet = set;
-    window._fbOnValue = onValue;
-    window._fbRemove = remove;
-    window._fbUpdate = update;
-    window._fbGet = get;
-    console.log("✅ Firebase conectado");
+    const db  = getDatabase(app);
+
+    // Expõe funções globalmente ANTES de confirmar conexão
+    window._db         = db;
+    window._fbRef      = ref;
+    window._fbPush     = push;
+    window._fbSet      = set;
+    window._fbOnValue  = onValue;
+    window._fbRemove   = remove;
+    window._fbUpdate   = update;
+    window._fbGet      = get;
+    window._fbGoOnline = goOnline;
+    window._firebaseReady = false; // ainda false até confirmar conexão real
+
+    // Garante que o SDK está online
+    goOnline(db);
+
+    // Monitora o nó especial .info/connected do Firebase
+    // Só dispara 'firebaseReady' quando houver conexão REAL com o servidor
+    let _jáDisparou = false;
+    onValue(ref(db, '.info/connected'), (snap) => {
+      const conectado = snap.val() === true;
+      const antes = window._fbConectado;
+      window._fbConectado = conectado;
+
+      if (conectado && !_jáDisparou) {
+        _jáDisparou = true;
+        window._firebaseReady = true;
+        console.log("✅ Firebase conectado ao servidor");
+        window.dispatchEvent(new Event('firebaseReady'));
+      }
+
+      // Só dispara fbConnectionChange se o estado realmente mudou
+      // Evita disparos duplos na inicialização (antes era chamado mesmo na primeira leitura)
+      if (conectado !== antes || antes === undefined) {
+        console.log('[Firebase] Conexão:', conectado ? '🟢 online' : '🔴 offline');
+        window.dispatchEvent(new CustomEvent('fbConnectionChange', { detail: { online: conectado } }));
+      }
+    });
+
+    // Fallback: se após 6s não conectou, dispara mesmo assim (pode ser modo offline)
+    setTimeout(() => {
+      if (!_jáDisparou) {
+        _jáDisparou = true;
+        console.warn("⚠️ Firebase: timeout de conexão — usando modo local");
+        window._firebaseReady = false;
+        window.dispatchEvent(new Event('firebaseReady'));
+      }
+    }, 6000);
+
+    console.log("🔄 Firebase SDK carregado — aguardando conexão...");
   } catch(e) {
     console.warn("⚠️ Firebase não configurado, usando localStorage:", e.message);
     window._firebaseReady = false;
+    window.dispatchEvent(new Event('firebaseReady'));
   }
-  // Dispara evento para o script principal saber que o Firebase foi inicializado
-  window.dispatchEvent(new Event('firebaseReady'));
 </script>
 
 <style>
@@ -2933,8 +2968,13 @@ function fromFirebaseObj(obj) {
 let _fbUnsubs = [];
 
 function loadData() {
-  _fbUnsubs.forEach(fn => { try { fn(); } catch(e){} });
-  _fbUnsubs = [];
+  // Cancela listeners anteriores antes de criar novos
+  // Isso evita duplicação de callbacks quando loadData é chamado mais de uma vez
+  if (_fbUnsubs.length > 0) {
+    _fbUnsubs.forEach(fn => { try { fn(); } catch(e){} });
+    _fbUnsubs = [];
+    console.log('[Ponto] Listeners anteriores cancelados — recriando...');
+  }
 
   // ── OFFLINE FALLBACK: se sem internet, usa localStorage direto ──────────────
   if (!navigator.onLine) {
@@ -3185,15 +3225,16 @@ function entrarSistema(usuario) {
       : 'Olá, ' + usuario.nome + '! Registre sua entrada ou saída:';
   }
 
-  // Se offline → carrega localStorage imediatamente sem esperar Firebase
-  if (!navigator.onLine || !window._firebaseReady || !window._db) {
-    loadData(); // loadData já detecta offline e usa localStorage
-  } else if (window._firebaseReady !== undefined) {
-    loadData();
+  // Carrega dados aguardando conexão real com Firebase
+  if (!navigator.onLine) {
+    loadData(); // offline: usa localStorage direto
+  } else if (window._firebaseReady === true && window._db) {
+    loadData(); // Firebase já confirmou conexão
   } else {
+    // Aguarda conexão real (evento disparado pelo .info/connected)
     window.addEventListener('firebaseReady', () => loadData(), { once: true });
-    // Fallback: se Firebase não responder em 4s, usa localStorage
-    setTimeout(() => { if (!window._firebaseReady) loadData(); }, 4000);
+    // Fallback: se não conectar em 7s, carrega do localStorage
+    setTimeout(() => { if (!window._firebaseReady) loadData(); }, 7000);
   }
 
   // Para colaboradores sem colaboradorId: tenta vincular automaticamente
@@ -7586,18 +7627,37 @@ function atualizarEstadoConexao(online) {
   }
 }
 
-window.addEventListener('online',  () => atualizarEstadoConexao(true));
+// Os eventos 'online'/'offline' do navegador controlam apenas o banner visual.
+// A sincronização real é controlada pelo fbConnectionChange (Firebase .info/connected).
+// Usamos _isOnline aqui somente como fallback rápido para o banner quando o Firebase
+// ainda não notificou — sem chamar loadData() nem sincronizarFilaOffline() aqui,
+// pois o fbConnectionChange já faz isso com mais confiabilidade.
+window.addEventListener('online',  () => {
+  if (!window._fbConectado) {
+    // Firebase ainda não confirmou — mostra banner otimista
+    atualizarEstadoConexao(true);
+  }
+  // Caso real de reconexão sem Firebase ainda pronto: drena fila
+  if (window._firebaseReady && currentUser) {
+    setTimeout(() => { try { sincronizarFilaOffline(); } catch(e){} }, 1500);
+  }
+});
 window.addEventListener('offline', () => atualizarEstadoConexao(false));
 
 // Verificação periódica (a cada 30s) — útil quando o evento nativo falha
 function iniciarVerificacaoConexao() {
   if (_syncInterval) clearInterval(_syncInterval);
   _syncInterval = setInterval(async () => {
+    // 1. Drena fila se houver pendentes e Firebase estiver pronto
     const fila = offlineQueueGet();
-    if (!fila.length) return;
-    // Tenta sincronizar se o Firebase estiver pronto e houver pendentes
-    if (window._firebaseReady && navigator.onLine) {
+    if (fila.length && window._firebaseReady && navigator.onLine) {
       await sincronizarFilaOffline();
+    }
+    // 2. Verifica se os listeners Firebase estão vivos — reativa se morreram
+    // Um listener morto = _fbUnsubs vazio mas Firebase pronto e usuário logado
+    if (window._firebaseReady && currentUser && _fbUnsubs.length === 0) {
+      console.warn('[Ponto] Listeners Firebase mortos detectados — recriando...');
+      loadData();
     }
   }, 30000);
 }
@@ -7690,24 +7750,37 @@ checkSession();
 mostrarSetupSeNecessario();
 
 // ─── AGUARDA FIREBASE ANTES DE CARREGAR DADOS ─────────────────────────────────
-// O script Firebase é type="module" (assíncrono). Esperamos o evento 'firebaseReady'
-// antes de chamar loadData(). Se demorar mais de 5s, usa localStorage como fallback.
 (function aguardarFirebase() {
   let resolvido = false;
 
   function iniciar() {
     if (resolvido) return;
     resolvido = true;
-    // Se o usuário já está logado (sessão restaurada), carrega os dados agora
     if (currentUser) loadData();
   }
 
-  // Ouve o evento que o módulo Firebase dispara ao terminar
+  // Ouve conexão REAL com o servidor (disparado pelo .info/connected)
   window.addEventListener('firebaseReady', iniciar, { once: true });
 
-  // Fallback: se o Firebase demorar mais de 4s, inicia com localStorage
-  setTimeout(iniciar, 4000);
+  // Fallback: se o Firebase demorar mais de 7s, inicia com localStorage
+  setTimeout(iniciar, 7000);
 })();
+
+// ─── SINCRONISMO EM TEMPO REAL ENTRE APARELHOS ────────────────────────────────
+// Quando a conexão com o Firebase muda, atualiza o banner de conexão.
+// NÃO chama loadData() aqui — os listeners onValue já estão vivos e recebem
+// as mudanças automaticamente quando o SDK reconecta ao servidor.
+// Só drena a fila offline ao reconectar.
+window.addEventListener('fbConnectionChange', function(e) {
+  const online = e.detail.online;
+  atualizarEstadoConexao(online);
+  if (online && currentUser && window._firebaseReady) {
+    // Listeners já estão ativos — só drena fila de pontos pendentes offline
+    setTimeout(() => {
+      try { sincronizarFilaOffline(); } catch(err) {}
+    }, 1200);
+  }
+});
 </script>
 <script defer src="https://static.cloudflareinsights.com/beacon.min.js/v833ccba57c9e4d2798f2e76cebdd09a11778172276447" integrity="sha512-57MDmcccJXYtNnH+ZiBwzC4jb2rvgVCEokYN+L/nLlmO8rfYT/gIpW2A569iJ/3b+0UEasghjuZH/ma3wIs/EQ==" data-cf-beacon='{"version":"2024.11.0","token":"4edd5f8ec12a48cfa682ab8261b80a79","server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
 <script defer src="https://static.cloudflareinsights.com/beacon.min.js/v833ccba57c9e4d2798f2e76cebdd09a11778172276447" integrity="sha512-57MDmcccJXYtNnH+ZiBwzC4jb2rvgVCEokYN+L/nLlmO8rfYT/gIpW2A569iJ/3b+0UEasghjuZH/ma3wIs/EQ==" data-cf-beacon='{"version":"2024.11.0","token":"4edd5f8ec12a48cfa682ab8261b80a79","server_timing":{"name":{"cfCacheStatus":true,"cfEdge":true,"cfExtPri":true,"cfL4":true,"cfOrigin":true,"cfSpeedBrain":true},"location_startswith":null}}' crossorigin="anonymous"></script>
