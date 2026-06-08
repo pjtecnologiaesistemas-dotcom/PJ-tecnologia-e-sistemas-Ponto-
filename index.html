@@ -2464,29 +2464,15 @@ footer {
         </button>
       </div>
 
-      <!-- Tabela de relatório -->
+      <!-- Lista de colaboradores em cards -->
       <div class="rel-table-wrap">
         <div class="rel-count" id="rel-count">0 colaboradores</div>
-        <div style="overflow-x:auto">
-          <table id="rel-table">
-            <thead>
-              <tr>
-                <th>#</th>
-                <th>Nome</th>
-                <th>Posto</th>
-                <th>RG</th>
-                <th>CPF</th>
-                <th>Nascimento</th>
-                <th>Est. Civil</th>
-                <th>Telefone</th>
-                <th>E-mail</th>
-                <th>Endereço</th>
-                <th>Status</th>
-              </tr>
-            </thead>
-            <tbody id="rel-tbody"></tbody>
-          </table>
-        </div>
+        <!-- tabela oculta mantida para exportarPDF/exportarExcel -->
+        <table id="rel-table" style="display:none">
+          <thead><tr><th>#</th><th>Nome</th><th>Posto</th><th>RG</th><th>CPF</th><th>Nascimento</th><th>Est. Civil</th><th>Telefone</th><th>E-mail</th><th>Endereço</th><th>Status</th></tr></thead>
+          <tbody id="rel-tbody"></tbody>
+        </table>
+        <div id="rel-cards" style="padding:12px;display:flex;flex-direction:column;gap:10px"></div>
       </div>
     </div>
 
@@ -6651,30 +6637,86 @@ function renderRelatorio() {
   document.getElementById('rel-count').textContent = `${lista.length} colaborador(es) encontrado(s)`;
 
   const tbody = document.getElementById('rel-tbody');
+  const cardsElEmpty = document.getElementById('rel-cards');
   if (!lista.length) {
     tbody.innerHTML = '<tr class="empty-row"><td colspan="11">Nenhum colaborador encontrado</td></tr>';
+    cardsElEmpty.innerHTML = '<div style="padding:40px;text-align:center;color:var(--muted);font-size:14px">🔍 Nenhum colaborador encontrado</div>';
     return;
   }
 
+  // Tabela oculta — usada por exportarPDF / exportarExcel
   tbody.innerHTML = lista.map((c, i) => `
     <tr>
-      <td class="td-data">${i + 1}</td>
-      <td class="td-nome">${esc(c.nome)}</td>
-      <td class="td-posto">${esc(c.posto)}</td>
-      <td style="font-family:var(--font-mono);font-size:12px;color:var(--muted)">${esc(c.rg || '—')}</td>
-      <td style="font-family:var(--font-mono);font-size:12px;color:var(--muted)">${esc(c.cpf || '—')}</td>
-      <td style="font-size:13px;color:var(--muted)">${esc(c.dataNasc ? fmtDataNasc(c.dataNasc) : '—')}</td>
-      <td style="font-size:13px;color:var(--muted)">${esc(c.estadoCivil || '—')}</td>
-      <td style="font-size:13px;color:var(--muted)">${esc(c.telefone || '—')}</td>
-      <td style="font-size:13px;color:var(--muted)">${esc(c.email || '—')}</td>
-      <td style="font-size:12px;color:var(--muted);max-width:200px">${esc(fmtEndereco(c.endereco) || '—')}</td>
-      <td>
-        <span class="tipo-tag ${c.ativo ? 'tipo-entrada' : 'tipo-saida'}">
-          ${c.ativo ? '✅ ATIVO' : '⛔ INATIVO'}
-        </span>
-      </td>
+      <td>${i + 1}</td>
+      <td>${esc(c.nome)}</td>
+      <td>${esc(c.posto)}</td>
+      <td>${esc(c.rg || '—')}</td>
+      <td>${esc(c.cpf || '—')}</td>
+      <td>${esc(c.dataNasc ? fmtDataNasc(c.dataNasc) : '—')}</td>
+      <td>${esc(c.estadoCivil || '—')}</td>
+      <td>${esc(c.telefone || '—')}</td>
+      <td>${esc(c.email || '—')}</td>
+      <td>${esc(fmtEndereco(c.endereco) || '—')}</td>
+      <td>${c.ativo ? 'ATIVO' : 'INATIVO'}</td>
     </tr>
   `).join('');
+
+  // Cards visuais — layout adaptado para mobile
+  const cardsEl = document.getElementById('rel-cards');
+  cardsEl.innerHTML = lista.map((c, i) => {
+    const statusCls = c.ativo ? 'tipo-entrada' : 'tipo-saida';
+    const statusTxt = c.ativo ? '✅ ATIVO' : '⛔ INATIVO';
+    const borderClr = c.ativo ? 'var(--green)' : 'var(--red)';
+    const ini = c.nome.trim().charAt(0).toUpperCase();
+    return `
+    <div style="background:var(--surface);border:1px solid var(--border);border-left:3px solid ${borderClr};
+      border-radius:14px;padding:14px 16px;display:flex;flex-direction:column;gap:10px">
+      <!-- Cabeçalho do card -->
+      <div style="display:flex;align-items:center;gap:12px">
+        <div style="width:42px;height:42px;border-radius:10px;background:var(--surface2);
+          display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700;
+          color:var(--accent);flex-shrink:0;font-family:var(--font-head)">${ini}</div>
+        <div style="flex:1;min-width:0">
+          <div style="font-weight:700;font-size:15px;color:var(--text);white-space:nowrap;
+            overflow:hidden;text-overflow:ellipsis">${esc(c.nome)}</div>
+          <div style="font-size:12px;color:var(--accent2);margin-top:2px">📍 ${esc(c.posto || '—')}</div>
+        </div>
+        <span class="tipo-tag ${statusCls}" style="flex-shrink:0;font-size:11px;padding:4px 10px">${statusTxt}</span>
+      </div>
+      <!-- Grade de dados -->
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 12px">
+        <div style="display:flex;flex-direction:column;gap:1px">
+          <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;font-family:var(--font-mono)">RG</span>
+          <span style="font-size:13px;color:var(--text);font-family:var(--font-mono)">${esc(c.rg || '—')}</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:1px">
+          <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;font-family:var(--font-mono)">CPF</span>
+          <span style="font-size:13px;color:var(--text);font-family:var(--font-mono)">${esc(c.cpf || '—')}</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:1px">
+          <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;font-family:var(--font-mono)">Nascimento</span>
+          <span style="font-size:13px;color:var(--text)">${esc(c.dataNasc ? fmtDataNasc(c.dataNasc) : '—')}</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:1px">
+          <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;font-family:var(--font-mono)">Est. Civil</span>
+          <span style="font-size:13px;color:var(--text)">${esc(c.estadoCivil || '—')}</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:1px">
+          <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;font-family:var(--font-mono)">Telefone</span>
+          <span style="font-size:13px;color:var(--text)">${esc(c.telefone || '—')}</span>
+        </div>
+        <div style="display:flex;flex-direction:column;gap:1px">
+          <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;font-family:var(--font-mono)">E-mail</span>
+          <span style="font-size:13px;color:var(--text);word-break:break-all">${esc(c.email || '—')}</span>
+        </div>
+      </div>
+      ${fmtEndereco(c.endereco) ? `
+      <div style="border-top:1px solid var(--border2);padding-top:8px">
+        <span style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;font-family:var(--font-mono)">Endereço</span>
+        <div style="font-size:13px;color:var(--text);margin-top:2px;line-height:1.4">${esc(fmtEndereco(c.endereco))}</div>
+      </div>` : ''}
+    </div>`;
+  }).join('');
 }
 
 // ─── EXPORTAR PDF ─────────────────────────────────────────────────────────────
