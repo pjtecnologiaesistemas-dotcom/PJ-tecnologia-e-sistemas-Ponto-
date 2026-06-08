@@ -4495,6 +4495,59 @@ function ftInit(){
   ftConectar();
 }
 
+// ── LIMPEZA DE FTs PENDENTES DUPLICADAS ─────────────────────────────────────
+// Remove do Firebase FTs pendentes com mesmo pontoId ou mesmo colab+dia que já existam duplicadas.
+// Executa apenas uma vez por sessão (flag _ftDupLimpezaFeita).
+function ftLimparDuplicadasFirebase(){
+  if(window._ftDupLimpezaFeita||!window._firebaseReady||!window._db)return;
+  window._ftDupLimpezaFeita=true;
+  window._fbGet(window._fbRef(window._db,"ft_registros")).then(function(snap){
+    if(!snap.exists())return;
+    var todos=Object.values(snap.val()||{});
+    // Filtra apenas pendentes
+    var pendentes=todos.filter(function(f){return (f.status||"pendente")==="pendente";});
+    // Agrupa por pontoId — mantém apenas o mais antigo de cada grupo
+    var porPontoId={};
+    pendentes.forEach(function(f){
+      var pid=f.pontoId||"";
+      if(!pid)return;
+      if(!porPontoId[pid])porPontoId[pid]=[];
+      porPontoId[pid].push(f);
+    });
+    var aRemover=[];
+    Object.keys(porPontoId).forEach(function(pid){
+      var grupo=porPontoId[pid].sort(function(a,b){return(a.criadoEm||"").localeCompare(b.criadoEm||"");});
+      // Mantém o primeiro (mais antigo), remove os demais
+      for(var i=1;i<grupo.length;i++)aRemover.push(grupo[i].id);
+    });
+    // Agrupa por colab+dia — se pontoId diferente mas mesmo colab+dia, remove os excedentes
+    var porColabDia={};
+    pendentes.forEach(function(f){
+      var chave=((f.colaboradorNome||"").trim().toLowerCase())+"|"+((f.dataHora||f.criadoEm||"").slice(0,10));
+      if(!porColabDia[chave])porColabDia[chave]=[];
+      porColabDia[chave].push(f);
+    });
+    Object.keys(porColabDia).forEach(function(chave){
+      var grupo=porColabDia[chave].sort(function(a,b){return(a.criadoEm||"").localeCompare(b.criadoEm||"");});
+      for(var i=1;i<grupo.length;i++){
+        if(!aRemover.includes(grupo[i].id))aRemover.push(grupo[i].id);
+      }
+    });
+    if(!aRemover.length){console.log("[FT] Nenhuma duplicata pendente encontrada.");return;}
+    console.warn("[FT] Removendo "+aRemover.length+" FT(s) pendente(s) duplicada(s) do Firebase:",aRemover);
+    var promises=aRemover.map(function(id){
+      return window._fbRemove(window._fbRef(window._db,"ft_registros/"+id)).catch(function(e){console.warn("[FT] Erro ao remover dup",id,e);});
+    });
+    Promise.all(promises).then(function(){
+      console.log("[FT] Limpeza de duplicatas concluída.");
+      // Limpa também ftsLocal
+      var remSet=new Set(aRemover);
+      ftS.ftsLocal=ftS.ftsLocal.filter(function(f){return !remSet.has(f.id);});
+      ftSalvarLocal();ftRenderLista();ftUpdateStats();
+    });
+  }).catch(function(e){console.warn("[FT] Erro na limpeza de duplicatas:",e);});
+}
+
 function ftConectar(){
   // Usa o Realtime Database já inicializado pelo módulo principal (window._db)
   function conectarComDB(){
@@ -4506,6 +4559,7 @@ function ftConectar(){
     ftS.dbFT=true; // sinaliza que a conexão está OK
     // Executa limpeza de histórico antigo no Firebase (apenas uma vez, controlado por flag)
     ftLimparFirebaseAntigos();
+    ftLimparDuplicadasFirebase();
     // Escuta mudanças na coleção FT em tempo real
     window._fbOnValue(window._fbRef(window._db,'ft_registros'),function(snap){
       var data=snap.val();
@@ -4609,32 +4663,59 @@ window.ftGerarDePonto=function(reg){
   if(!ftDentroPeriodoFT(ftDataDoRegistro(reg)))return;
 
   function _gerar(){
-    // Dedup 1: checa ftsLocal E ftFirestore pelo pontoId (evita regerar FT já existente)
+    // ── Dedup 1: pontoId já existe em memória ──────────────────────────────
     var jaExiste=ftS.ftsLocal.some(function(f){return f.pontoId===reg.id;})
       ||ftS.ftFirestore.some(function(f){return f.pontoId===reg.id||f._pontoId===reg.id;});
-    if(jaExiste)return;
-    // Dedup 2: impede gerar FT duplicada para o mesmo colaborador no mesmo dia
-    // Checa ftsLocal E ftFirestore — cobre multi-dispositivo (registro chegou via Firebase)
-    var agora60=Date.now();
+    if(jaExiste){console.log('[FT] Dedup1: pontoId já processado —',reg.id);return;}
+
+    // ── Dedup 2: já existe FT para este colaborador neste dia (memória) ────
     var colabNomeLower=(reg.colaboradorNome||'').trim().toLowerCase();
     var regDia=ftLocalISO(reg.timestamp).slice(0,10);
-    // Dedup 2a: FT já existe localmente (criada neste dispositivo)
-    var jaGeradaRecente=ftS.ftsLocal.some(function(f){
-      if((f.colaboradorNome||'').trim().toLowerCase()!==colabNomeLower)return false;
-      if((f.dataHora||f.criadoEm||'').slice(0,10)!==regDia)return false;
-      var criadoMs=f.criadoEm?new Date(f.criadoEm).getTime():0;
-      return (agora60-criadoMs)<(60*60*1000);
+    var jaLocal=ftS.ftsLocal.some(function(f){
+      return (f.colaboradorNome||'').trim().toLowerCase()===colabNomeLower
+          && (f.dataHora||f.criadoEm||'').slice(0,10)===regDia;
     });
-    // Dedup 2b: FT já existe no Firebase (criada em outro dispositivo) — anti-duplicidade multi-device
-    if(!jaGeradaRecente){
-      jaGeradaRecente=ftS.ftFirestore.some(function(f){
-        if((f.colaboradorNome||f.substituto||'').trim().toLowerCase()!==colabNomeLower)return false;
-        if((f.dataHora||f.criadoEm||'').slice(0,10)!==regDia)return false;
-        return true; // já existe FT no Firebase para este colaborador neste dia
+    if(jaLocal){console.warn('[FT] Dedup2: FT local já existe para',reg.colaboradorNome,'em',regDia);return;}
+    var jaFirebase=ftS.ftFirestore.some(function(f){
+      return (f.colaboradorNome||f.substituto||'').trim().toLowerCase()===colabNomeLower
+          && (f.dataHora||f.criadoEm||'').slice(0,10)===regDia;
+    });
+    if(jaFirebase){console.warn('[FT] Dedup2: FT Firebase já existe para',reg.colaboradorNome,'em',regDia);return;}
+
+    // ── Dedup 3: LOCK ATÔMICO no Firebase por pontoId ─────────────────────
+    // Usa ft_locks/{pontoId} como mutex — só o primeiro dispositivo que gravar cria a FT.
+    // Se Firebase não está disponível, prossegue localmente (modo offline).
+    if(window._firebaseReady&&window._db){
+      var lockRef=window._fbRef(window._db,'ft_locks/'+reg.id);
+      window._fbGet(lockRef).then(function(snap){
+        if(snap.exists()){
+          // Outro dispositivo já criou a FT para este pontoId
+          console.warn('[FT] Dedup3: lock já existe para pontoId',reg.id,'— ignorando.');
+          return;
+        }
+        // Grava o lock ANTES de criar a FT — reserva o "direito" de criá-la
+        return window._fbSet(lockRef,{criadoEm:new Date().toISOString(),colabNome:reg.colaboradorNome})
+          .then(function(){
+            _criarFT();
+            // Expira o lock após 10 minutos (limpeza automática via setTimeout)
+            setTimeout(function(){
+              window._fbRemove(lockRef).catch(function(){});
+            }, 10*60*1000);
+          });
+      }).catch(function(e){
+        // Falha no Firebase — gera localmente para não perder o lançamento
+        console.warn('[FT] Dedup3: erro ao verificar lock, gerando localmente:',e);
+        _criarFT();
       });
-      if(jaGeradaRecente)console.warn('[FT] Dedup Firebase: FT já existe no servidor para '+reg.colaboradorNome+' em '+regDia+'. Ignorando.');
+    } else {
+      // Offline — gera localmente
+      _criarFT();
     }
-    if(jaGeradaRecente){console.warn('[FT] Dedup cooldown: FT já gerada para '+reg.colaboradorNome+' nas últimas 60 min. Ignorando.');return;}
+  }
+
+  function _criarFT(){
+    // Última verificação de memória (race condition local entre chamadas rápidas)
+    if(ftS.ftsLocal.some(function(f){return f.pontoId===reg.id;})){return;}
     var r=ftBuscarPadrao(reg),pad=r.padrao,turno=r.turnoDetectado;
     var ft={id:ftUid(),pontoId:reg.id,colaboradorId:reg.colaboradorId||'',colaboradorNome:reg.colaboradorNome||'',
       posto:(pad&&pad.posto)||reg.posto||'',horario:(pad&&pad.horario)||(turno?turno.t:''),
@@ -4646,18 +4727,17 @@ window.ftGerarDePonto=function(reg){
     ftS.ftsLocal.unshift(ft);ftSalvarLocal();ftRenderLista();ftUpdateStats();
     var ok=ft.posto&&ft.horario&&ft.motivo&&ft.valor;
     ftToast(ft.confianca>=80&&ok?'🤖 FT gerada: '+ft.colaboradorNome:'📋 FT pendente: '+ft.colaboradorNome,ft.confianca>=80&&ok?'success':'warn');
-    // Persiste FT pendente no Firebase para que outros dispositivos vejam em tempo real
+    // Persiste FT pendente no Firebase
     if(window._firebaseReady&&window._db){
       window._fbSet(window._fbRef(window._db,'ft_registros/'+ft.id),ft)
         .catch(function(e){console.warn('[FT] Erro ao salvar pendente no Firebase:',e);});
     }
   }
 
-  // Se Firebase já carregou e tem dados, gera imediatamente
-  if(ftS.dbFT&&ftS.ftFirestore.length>=0){
+  // Aguarda Firebase estar pronto para garantir dedup correto
+  if(ftS.dbFT){
     _gerar();
   } else {
-    // Firebase ainda não conectou — aguarda até 4s para garantir dedup correto
     var tentativas=0;
     var _intervalo=setInterval(function(){
       tentativas++;
