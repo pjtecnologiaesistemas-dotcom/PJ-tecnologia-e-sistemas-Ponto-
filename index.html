@@ -2807,19 +2807,42 @@ function _syncErr()   { _setSyncStatus('error'); setTimeout(()=>{ if(_syncPendin
 function savePostos() {
   localStorage.setItem('ms_postos', JSON.stringify(postos));
   if (window._firebaseReady) {
-    const obj = {}; postos.forEach(p => { obj[p.id] = p; });
+    // Atualiza cada posto individualmente — evita conflito entre aparelhos
+    postos.forEach(p => {
+      _syncStart();
+      window._fbSet(window._fbRef(window._db, 'postos/' + p.id), p)
+        .then(_syncDone).catch(e => { _syncErr(); console.warn('savePostos:', e.message); });
+    });
+  }
+}
+
+function saveUmPosto(posto) {
+  localStorage.setItem('ms_postos', JSON.stringify(postos));
+  if (window._firebaseReady) {
     _syncStart();
-    window._fbSet(window._fbRef(window._db, 'postos'), obj)
-      .then(_syncDone).catch(e => { _syncErr(); console.warn('savePostos:', e.message); });
+    window._fbSet(window._fbRef(window._db, 'postos/' + posto.id), posto)
+      .then(_syncDone).catch(e => { _syncErr(); console.warn('saveUmPosto:', e.message); });
+  }
+}
+
+function removeUmPosto(id) {
+  localStorage.setItem('ms_postos', JSON.stringify(postos));
+  if (window._firebaseReady) {
+    _syncStart();
+    window._fbRemove(window._fbRef(window._db, 'postos/' + id))
+      .then(_syncDone).catch(e => { _syncErr(); console.warn('removeUmPosto:', e.message); });
   }
 }
 
 function saveColabs() {
   localStorage.setItem('ms_colaboradores', JSON.stringify(colaboradores));
   if (window._firebaseReady) {
-    _syncStart();
-    window._fbSet(window._fbRef(window._db, 'colaboradores'), toFirebaseObj(colaboradores, 'id'))
-      .then(_syncDone).catch(e => { _syncErr(); console.warn('saveColabs:', e.message); });
+    // Atualiza cada colaborador individualmente — evita conflito entre aparelhos
+    colaboradores.forEach(c => {
+      _syncStart();
+      window._fbSet(window._fbRef(window._db, 'colaboradores/' + c.id), c)
+        .then(_syncDone).catch(e => { _syncErr(); console.warn('saveColabs:', e.message); });
+    });
   }
 }
 
@@ -2856,18 +2879,24 @@ function saveUmRegistro(reg) {
 function saveRegistros() {
   localStorage.setItem('ms_registros', JSON.stringify(registros));
   if (window._firebaseReady) {
-    _syncStart();
-    window._fbSet(window._fbRef(window._db, 'registros'), toFirebaseObj(registros, 'id'))
-      .then(_syncDone).catch(e => { _syncErr(); console.warn('saveRegistros:', e.message); });
+    // Atualiza cada registro individualmente — evita conflito entre aparelhos
+    registros.forEach(r => {
+      _syncStart();
+      window._fbSet(window._fbRef(window._db, 'registros/' + r.id), r)
+        .then(_syncDone).catch(e => { _syncErr(); console.warn('saveRegistros:', e.message); });
+    });
   }
 }
 
 function saveUsuarios() {
   localStorage.setItem('ms_usuarios', JSON.stringify(usuarios));
   if (window._firebaseReady) {
-    _syncStart();
-    window._fbSet(window._fbRef(window._db, 'usuarios'), toFirebaseObj(usuarios, 'id'))
-      .then(_syncDone).catch(e => { _syncErr(); console.warn('saveUsuarios:', e.message); });
+    // Atualiza cada usuário individualmente — evita conflito entre aparelhos
+    usuarios.forEach(u => {
+      _syncStart();
+      window._fbSet(window._fbRef(window._db, 'usuarios/' + u.id), u)
+        .then(_syncDone).catch(e => { _syncErr(); console.warn('saveUsuarios:', e.message); });
+    });
   }
 }
 
