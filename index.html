@@ -2217,10 +2217,10 @@ footer {
     <!-- Seletor de posto (aparece ao selecionar colaborador) -->
     <div id="posto-selector" style="display:none;margin-bottom:16px">
       <label style="display:block;font-size:11px;color:var(--muted);letter-spacing:1.5px;text-transform:uppercase;margin-bottom:8px;font-family:var(--font-mono)">
-        📍 Selecione o posto de trabalho <span style="color:var(--muted);font-size:10px">(opcional)</span>
+        📍 Posto de trabalho <span style="color:var(--red);font-size:12px">*obrigatório</span>
       </label>
       <select id="ponto-posto-select" class="input" style="font-size:15px;padding:13px 14px;border-radius:12px">
-        <option value="">Sem posto definido</option>
+        <option value="">-- Selecione o posto --</option>
       </select>
     </div>
 
@@ -3051,10 +3051,22 @@ function loadData() {
         clearTimeout(seedUserTimer);
         const lista = fromFirebaseObj(data);
         if (lista.length) {
-          // Merge: preserva usuários locais ainda em trânsito para o Firebase
+          // Merge SEGURO: Firebase + localStorage + memória
+          // Lê localStorage diretamente para pegar dados que podem ter sumido da memória
+          let localCache = [];
+          try { localCache = JSON.parse(localStorage.getItem('ms_usuarios') || '[]'); } catch { localCache = []; }
           const idsFirebase = new Set(lista.map(u => u.id));
-          const locaisPendentes = usuarios.filter(u => !idsFirebase.has(u.id));
+          // Une todos os usuários que NÃO estão no Firebase (de memória e localStorage)
+          const fonteLocal = localCache.length >= usuarios.length ? localCache : usuarios;
+          const locaisPendentes = fonteLocal.filter(u => !idsFirebase.has(u.id));
           usuarios = [...lista, ...locaisPendentes];
+          // Garante que o admin padrão sempre existe
+          if (!usuarios.find(u => u.login === 'admin')) {
+            const adminDefault = { id: 'admin-default', login: 'admin', senha: 'admin123', nome: 'Administrador', role: 'admin' };
+            usuarios.push(adminDefault);
+            // Salva admin no Firebase para nunca mais perder
+            if (window._db) window._fbSet(window._fbRef(window._db, 'usuarios/admin-default'), adminDefault).catch(()=>{});
+          }
           localStorage.setItem('ms_usuarios', JSON.stringify(usuarios));
           // Atualiza sessão se o usuário logado foi alterado no Firebase
           if (currentUser) {
@@ -3794,10 +3806,12 @@ async function baterPonto(tipo) {
   const postoEscolhido = document.getElementById('ponto-posto-select').value;
   if (!postoEscolhido) {
     const sel = document.getElementById('ponto-posto-select');
-    sel.style.borderColor = 'var(--accent)';
-    sel.style.boxShadow = '0 0 0 3px #f59e0b20';
-    setTimeout(() => { sel.style.borderColor = ''; sel.style.boxShadow = ''; }, 2500);
-    // Continua sem bloquear — posto é opcional ao bater ponto
+    sel.style.borderColor = 'var(--red)';
+    sel.style.boxShadow = '0 0 0 3px #e8273f33';
+    sel.focus();
+    setTimeout(() => { sel.style.borderColor = ''; sel.style.boxShadow = ''; }, 3000);
+    mostrarSyncToast('⚠️ Selecione o posto antes de registrar o ponto!', 'gold');
+    return; // BLOQUEIA — posto obrigatório
   }
   pendingTipo = tipo;
   pendingLocalizacao = null;
@@ -6966,6 +6980,14 @@ function copiarConfig(btn) {
   if (!usuarios.length) {
     usuarios = [{ id: uid(), login: 'admin', senha: 'admin123', nome: 'Administrador', role: 'admin' }];
     localStorage.setItem('ms_usuarios', JSON.stringify(usuarios));
+  }
+  // Garante que o admin padrão sempre existe na lista local
+  // (pode ter sumido se o Firebase sobrescreveu o localStorage sem ele)
+  if (!usuarios.find(u => u.login === 'admin')) {
+    const adminDefault = { id: 'admin-default', login: 'admin', senha: 'admin123', nome: 'Administrador', role: 'admin' };
+    usuarios.push(adminDefault);
+    localStorage.setItem('ms_usuarios', JSON.stringify(usuarios));
+    console.warn('[Init] Admin restaurado no localStorage');
   }
 })();
 
