@@ -402,6 +402,11 @@ main {
 }
 .tag-in  { background: var(--green-bg); color: var(--green); border: 1px solid #00ff8833; }
 .tag-out { background: var(--red-bg);   color: var(--red);   border: 1px solid #e8273f33; }
+.tag-warn   { background: #1a1000;          color: var(--gold);  border: 1px solid #fbbf2444; }
+.tag-absent { background: var(--red-bg);    color: var(--red);   border: 1px solid #e8273f44; }
+.colab-item.status-ok     { border-left: 3px solid var(--green); }
+.colab-item.status-warn   { border-left: 3px solid var(--gold); }
+.colab-item.status-absent { border-left: 3px solid var(--red); }
 .status-time { font-size: 11px; color: var(--muted); margin-top: 4px; font-family: var(--font-mono); }
 
 /* ── PONTO BUTTONS ── */
@@ -3663,8 +3668,41 @@ function renderColabPonto() {
   ativos.sort((a,b) => a.nome.localeCompare(b.nome,'pt-BR',{sensitivity:'base'})).forEach(c => {
     const ult = ultimoReg(c.id);
     const isSelected = selectedColab?.id === c.id;
+
+    // ── Lógica de status visual ──────────────────────────────────────────────
+    // Verde  = última entrada de hoje (dentro do plantão)
+    // Âmbar  = entrada há mais de 8h (possível esqueceu de bater saída) OU saída registrada
+    // Vermelho = sem nenhum registro hoje
+    const agora = Date.now();
+    const HOJE_INI = new Date(); HOJE_INI.setHours(0,0,0,0);
+    const ultHoje = ult && ult.timestamp >= HOJE_INI.getTime();
+    const OITO_H = 8 * 60 * 60 * 1000;
+    let statusClass, tagClass, tagLabel;
+    if (!ult || !ultHoje) {
+      // Nenhum registro hoje
+      statusClass = 'status-absent';
+      tagClass    = 'tag-absent';
+      tagLabel    = '⚠ SEM REG.';
+    } else if (ult.tipo === 'entrada' && (agora - ult.timestamp) > OITO_H) {
+      // Entrada há mais de 8h — âmbar (possível esqueceu saída)
+      statusClass = 'status-warn';
+      tagClass    = 'tag-warn';
+      tagLabel    = '⏱ +8H DENTRO';
+    } else if (ult.tipo === 'entrada') {
+      // Entrada normal — verde
+      statusClass = 'status-ok';
+      tagClass    = 'tag-in';
+      tagLabel    = '▲ DENTRO';
+    } else {
+      // Saída registrada — âmbar (fora do posto)
+      statusClass = 'status-warn';
+      tagClass    = 'tag-out';
+      tagLabel    = '▼ FORA';
+    }
+    // ────────────────────────────────────────────────────────────────────────
+
     const div = document.createElement('div');
-    div.className = 'colab-item' + (isSelected ? ' selected' : '');
+    div.className = 'colab-item' + (isSelected ? ' selected' : '') + ' ' + statusClass;
     div.onclick = () => selectColab(c);
     div.innerHTML = `
       <div class="avatar" style="background:${avatarColor(c.nome)}">${c.nome.charAt(0)}</div>
@@ -3674,11 +3712,9 @@ function renderColabPonto() {
       </div>
       ${ult ? `
       <div class="status-tag">
-        <span class="${ult.tipo==='entrada'?'tag-in':'tag-out'}">
-          ${ult.tipo==='entrada'?'▲ DENTRO':'▼ FORA'}
-        </span>
+        <span class="${tagClass}">${tagLabel}</span>
         <div class="status-time">${fmtHora(ult.timestamp)}</div>
-      </div>` : '<div class="status-tag"><span style="color:var(--muted);font-size:12px">–</span></div>'}
+      </div>` : `<div class="status-tag"><span class="${tagClass}">${tagLabel}</span></div>`}
     `;
     container.appendChild(div);
   });
@@ -4577,18 +4613,27 @@ window.ftGerarDePonto=function(reg){
     var jaExiste=ftS.ftsLocal.some(function(f){return f.pontoId===reg.id;})
       ||ftS.ftFirestore.some(function(f){return f.pontoId===reg.id||f._pontoId===reg.id;});
     if(jaExiste)return;
-    // Dedup 2: espelha o cooldown de 60min da UI — impede gerar FT duplicada
-    // para o mesmo colaborador no mesmo dia/posto se já existe uma gerada recentemente
+    // Dedup 2: impede gerar FT duplicada para o mesmo colaborador no mesmo dia
+    // Checa ftsLocal E ftFirestore — cobre multi-dispositivo (registro chegou via Firebase)
     var agora60=Date.now();
     var colabNomeLower=(reg.colaboradorNome||'').trim().toLowerCase();
     var regDia=ftLocalISO(reg.timestamp).slice(0,10);
+    // Dedup 2a: FT já existe localmente (criada neste dispositivo)
     var jaGeradaRecente=ftS.ftsLocal.some(function(f){
       if((f.colaboradorNome||'').trim().toLowerCase()!==colabNomeLower)return false;
       if((f.dataHora||f.criadoEm||'').slice(0,10)!==regDia)return false;
-      // Considera duplicata se criada nos últimos 60 minutos (mesmo cooldown da UI)
       var criadoMs=f.criadoEm?new Date(f.criadoEm).getTime():0;
       return (agora60-criadoMs)<(60*60*1000);
     });
+    // Dedup 2b: FT já existe no Firebase (criada em outro dispositivo) — anti-duplicidade multi-device
+    if(!jaGeradaRecente){
+      jaGeradaRecente=ftS.ftFirestore.some(function(f){
+        if((f.colaboradorNome||f.substituto||'').trim().toLowerCase()!==colabNomeLower)return false;
+        if((f.dataHora||f.criadoEm||'').slice(0,10)!==regDia)return false;
+        return true; // já existe FT no Firebase para este colaborador neste dia
+      });
+      if(jaGeradaRecente)console.warn('[FT] Dedup Firebase: FT já existe no servidor para '+reg.colaboradorNome+' em '+regDia+'. Ignorando.');
+    }
     if(jaGeradaRecente){console.warn('[FT] Dedup cooldown: FT já gerada para '+reg.colaboradorNome+' nas últimas 60 min. Ignorando.');return;}
     var r=ftBuscarPadrao(reg),pad=r.padrao,turno=r.turnoDetectado;
     var ft={id:ftUid(),pontoId:reg.id,colaboradorId:reg.colaboradorId||'',colaboradorNome:reg.colaboradorNome||'',
