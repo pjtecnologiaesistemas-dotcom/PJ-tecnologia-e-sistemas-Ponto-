@@ -2340,17 +2340,18 @@ footer {
       </div>
     </div>
     <div class="table-wrap">
-      <div style="overflow-x:auto">
-        <table>
-          <thead>
-            <tr>
-              <th id="th-sel" style="display:none;width:36px;text-align:center"><input type="checkbox" id="hist-sel-all" title="Selecionar todos" onchange="histToggleAll(this.checked)" style="cursor:pointer;width:16px;height:16px"/></th>
-              <th>Data</th><th>Colaborador</th><th>Posto</th><th>Entrada</th><th>Saída</th><th>Duração</th><th id="th-acoes" style="display:none">Ações</th>
-            </tr>
-          </thead>
-          <tbody id="hist-tbody"></tbody>
-        </table>
-      </div>
+      <!-- Tabela oculta — mantida para exportarHistoricoPDF / exportarHistoricoExcel -->
+      <table id="hist-table-hidden" style="display:none">
+        <thead>
+          <tr>
+            <th id="th-sel" style="display:none;width:36px;text-align:center"><input type="checkbox" id="hist-sel-all" title="Selecionar todos" onchange="histToggleAll(this.checked)" style="cursor:pointer;width:16px;height:16px"/></th>
+            <th>Data</th><th>Colaborador</th><th>Posto</th><th>Entrada</th><th>Saída</th><th>Duração</th><th id="th-acoes" style="display:none">Ações</th>
+          </tr>
+        </thead>
+        <tbody id="hist-tbody"></tbody>
+      </table>
+      <!-- Cards mobile -->
+      <div id="hist-cards"></div>
       <div class="pagination" id="pagination" style="display:none">
         <button class="btn-page" id="btn-prev" onclick="changePage(-1)">‹ Anterior</button>
         <span class="page-info" id="page-info"></span>
@@ -4290,48 +4291,99 @@ function _renderHistTabla() {
   _atualizarBarraSel();
 
   const tbody = document.getElementById('hist-tbody');
+  const histCards = document.getElementById('hist-cards');
   const colSpan = isAdmin ? 8 : 6;
+
   if (!slice.length) {
     tbody.innerHTML = `<tr class="empty-row"><td colspan="${colSpan}">Nenhum registro encontrado</td></tr>`;
+    if (histCards) histCards.innerHTML = '<div style="padding:40px;text-align:center;color:var(--muted);font-size:14px">📭 Nenhum registro encontrado</div>';
   } else {
+    // ── Tabela oculta (para exportadores) ──────────────────────────────────
     tbody.innerHTML = slice.map(l => {
       const idsEsc = esc(JSON.stringify(l.ids || []));
-      const rowKey = (l.ids||[]).join(',');
       const isSel  = (l.ids||[]).every(id => _histSelIds.has(id));
-      const turnoLabel = l.turnoIdx > 0 ? `<span style="font-size:10px;color:var(--gold);font-family:var(--font-mono);margin-left:6px">TURNO ${l.turnoIdx + 1}</span>` : '';
-      const entradaHtml = l.entrada
-        ? `<span class="tipo-tag tipo-entrada">▲ ${fmtHora(l.entrada)}</span>${l.locEntrada ? `<br><a href="https://maps.google.com/?q=${l.locEntrada.lat},${l.locEntrada.lng}" target="_blank" style="font-size:10px;color:var(--accent);text-decoration:none" title="Ver localização">📍 Ver mapa</a>` : '<br><span style="font-size:10px;color:var(--muted)">📍 —</span>'}`
-        : `<span class="tipo-tag tipo-vazio">–</span>`;
-      const saidaHtml = l.saida
-        ? `<span class="tipo-tag tipo-saida">▼ ${fmtHora(l.saida)}</span>${l.locSaida ? `<br><a href="https://maps.google.com/?q=${l.locSaida.lat},${l.locSaida.lng}" target="_blank" style="font-size:10px;color:var(--accent);text-decoration:none" title="Ver localização">📍 Ver mapa</a>` : '<br><span style="font-size:10px;color:var(--muted)">📍 —</span>'}`
-        : `<span class="tipo-tag tipo-vazio">–</span>`;
-      const selHtml = isAdmin
-        ? `<td style="text-align:center;width:36px"><input type="checkbox" data-ids='${idsEsc}' ${isSel?'checked':''} onchange="histToggleRow(this)" style="cursor:pointer;width:16px;height:16px"/></td>`
+      const turnoLabel = l.turnoIdx > 0 ? `TURNO ${l.turnoIdx + 1}` : '';
+      const selHtml = isAdmin ? `<td><input type="checkbox" data-ids='${idsEsc}' ${isSel?'checked':''} onchange="histToggleRow(this)"/></td>` : '';
+      const acoesHtml = isAdmin ? `<td><button class="btn-del" onclick="confirmarDelRegistroPorIds(${idsEsc},'${esc(l.colaboradorNome)}','${esc(fmtData(l.dataTs))}')">🗑️</button></td>` : '';
+      const dur = (l.entrada && l.saida) ? (() => { const ms=l.saida-l.entrada,h=Math.floor(ms/3600000),m=Math.floor((ms%3600000)/60000),s=Math.floor((ms%60000)/1000); return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`; })() : '–';
+      return `<tr>${selHtml}<td>${fmtData(l.dataTs)}${turnoLabel?` (${turnoLabel})`:""}</td><td>${esc(l.colaboradorNome)}</td><td>${esc(l.posto)}</td><td>${l.entrada?fmtHora(l.entrada):"–"}</td><td>${l.saida?fmtHora(l.saida):"–"}</td><td>${dur}</td>${acoesHtml}</tr>`;
+    }).join('');
+
+    // ── Cards mobile (layout completo) ─────────────────────────────────────
+    if (histCards) histCards.innerHTML = slice.map(l => {
+      const idsEsc = esc(JSON.stringify(l.ids || []));
+      const isSel  = (l.ids||[]).every(id => _histSelIds.has(id));
+      const turnoLabel = l.turnoIdx > 0
+        ? `<span style="font-size:10px;color:var(--gold);font-family:var(--font-mono);font-weight:700;background:#1a1000;border:1px solid #fbbf2433;border-radius:6px;padding:1px 7px">TURNO ${l.turnoIdx + 1}</span>`
         : '';
-      const acoesHtml = isAdmin
-        ? `<td style="text-align:center"><button class="btn-del" title="Excluir este turno" onclick="confirmarDelRegistroPorIds(${idsEsc},'${esc(l.colaboradorNome)}','${esc(fmtData(l.dataTs))}')" >🗑️</button></td>`
+      const dur = (l.entrada && l.saida) ? (() => {
+        const ms=l.saida-l.entrada,h=Math.floor(ms/3600000),m=Math.floor((ms%3600000)/60000),s=Math.floor((ms%60000)/1000);
+        return `${String(h).padStart(2,"0")}:${String(m).padStart(2,"0")}:${String(s).padStart(2,"0")}`;
+      })() : null;
+      const selCb = isAdmin
+        ? `<input type="checkbox" data-ids='${idsEsc}' ${isSel?'checked':''} onchange="histToggleRow(this)" style="width:16px;height:16px;cursor:pointer;accent-color:var(--accent);flex-shrink:0"/>`
         : '';
-      const duracaoHtml = (l.entrada && l.saida)
-        ? (() => {
-            const ms = l.saida - l.entrada;
-            const h  = Math.floor(ms/3600000);
-            const m  = Math.floor((ms%3600000)/60000);
-            const s  = Math.floor((ms%60000)/1000);
-            return `<span style="font-family:var(--font-mono);font-size:13px;color:var(--accent)">${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}</span>`;
-          })()
-        : `<span style="color:var(--muted);font-size:12px">–</span>`;
+      const delBtn = isAdmin
+        ? `<button class="btn-del" title="Excluir" onclick="confirmarDelRegistroPorIds(${idsEsc},'${esc(l.colaboradorNome)}','${esc(fmtData(l.dataTs))}')">🗑️</button>`
+        : '';
+      const mapEntrada = l.locEntrada
+        ? `<a href="https://maps.google.com/?q=${l.locEntrada.lat},${l.locEntrada.lng}" target="_blank" style="font-size:11px;color:var(--accent);text-decoration:none">📍 Ver mapa</a>`
+        : `<span style="font-size:11px;color:var(--muted)">📍 —</span>`;
+      const mapSaida = l.locSaida
+        ? `<a href="https://maps.google.com/?q=${l.locSaida.lat},${l.locSaida.lng}" target="_blank" style="font-size:11px;color:var(--accent);text-decoration:none">📍 Ver mapa</a>`
+        : `<span style="font-size:11px;color:var(--muted)">📍 —</span>`;
+
       return `
-        <tr>
-          ${selHtml}
-          <td class="td-data">${fmtData(l.dataTs)}${turnoLabel}</td>
-          <td class="td-nome">${esc(l.colaboradorNome)}</td>
-          <td class="td-posto">${esc(l.posto)}</td>
-          <td>${entradaHtml}</td>
-          <td>${saidaHtml}</td>
-          <td style="text-align:center">${duracaoHtml}</td>
-          ${acoesHtml}
-        </tr>
-      `;
+      <div style="background:var(--surface);border:1px solid var(--border);border-radius:14px;
+        padding:14px 16px;margin-bottom:10px;display:flex;flex-direction:column;gap:10px">
+
+        <!-- Linha 1: checkbox + data + turno + lixeira -->
+        <div style="display:flex;align-items:center;gap:10px">
+          ${selCb}
+          <div style="flex:1;min-width:0">
+            <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+              <span style="font-family:var(--font-mono);font-size:13px;color:var(--muted)">${fmtData(l.dataTs)}</span>
+              ${turnoLabel}
+            </div>
+          </div>
+          ${delBtn}
+        </div>
+
+        <!-- Linha 2: colaborador + posto -->
+        <div style="display:flex;gap:10px;align-items:flex-start">
+          <div style="width:36px;height:36px;border-radius:9px;background:var(--surface2);
+            display:flex;align-items:center;justify-content:center;font-size:16px;font-weight:700;
+            color:var(--accent);flex-shrink:0;font-family:var(--font-head)">${(l.colaboradorNome||'?').charAt(0).toUpperCase()}</div>
+          <div style="min-width:0">
+            <div style="font-weight:700;font-size:14px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${esc(l.colaboradorNome)}</div>
+            <div style="font-size:12px;color:var(--accent2);margin-top:2px">📍 ${esc(l.posto||'—')}</div>
+          </div>
+        </div>
+
+        <!-- Linha 3: entrada + saída lado a lado -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <div style="background:var(--green-bg);border:1px solid #00ff8822;border-radius:10px;padding:9px 12px">
+            <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;font-family:var(--font-mono);margin-bottom:4px">Entrada</div>
+            ${l.entrada
+              ? `<div style="font-size:15px;font-weight:700;color:var(--green);font-family:var(--font-mono)">▲ ${fmtHora(l.entrada)}</div>
+                 <div style="margin-top:4px">${mapEntrada}</div>`
+              : `<div style="font-size:14px;color:var(--muted)">—</div>`}
+          </div>
+          <div style="background:var(--red-bg);border:1px solid #e8273f22;border-radius:10px;padding:9px 12px">
+            <div style="font-size:10px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;font-family:var(--font-mono);margin-bottom:4px">Saída</div>
+            ${l.saida
+              ? `<div style="font-size:15px;font-weight:700;color:var(--red);font-family:var(--font-mono)">▼ ${fmtHora(l.saida)}</div>
+                 <div style="margin-top:4px">${mapSaida}</div>`
+              : `<div style="font-size:14px;color:var(--muted)">—</div>`}
+          </div>
+        </div>
+
+        <!-- Linha 4: duração total (só se ambos existem) -->
+        ${dur ? `<div style="display:flex;align-items:center;gap:8px;background:rgba(0,212,255,.06);border:1px solid rgba(0,212,255,.15);border-radius:8px;padding:7px 12px">
+          <span style="font-size:11px;color:var(--muted);text-transform:uppercase;letter-spacing:1px;font-family:var(--font-mono)">Duração</span>
+          <span style="font-family:var(--font-mono);font-size:15px;font-weight:700;color:var(--accent)">${dur}</span>
+        </div>` : ''}
+      </div>`;
     }).join('');
   }
 
