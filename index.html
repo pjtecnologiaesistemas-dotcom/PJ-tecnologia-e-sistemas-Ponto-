@@ -5386,7 +5386,7 @@ window.ftModalAbrir=function(ftId){
 };
 window.ftModalFechar=function(){document.getElementById('ft-modal-overlay').style.display='none';};
 
-// Preenche select de colaboradores ausentes (Atestado / Suspensão)
+// Preenche select de colaboradores ausentes (Atestado / Suspensão / Cobertura de Férias / Afastamento)
 function ftPopularColabAusente(selId, valorAtual){
   var sel=document.getElementById(selId);
   var ativos=(typeof colaboradores!=='undefined'?colaboradores:[]).filter(function(c){return c.ativo!==false;});
@@ -5395,7 +5395,7 @@ function ftPopularColabAusente(selId, valorAtual){
   }).join('');
 }
 function ftMotivoPrecisaColab(motivo){
-  return motivo==='Atestado'||motivo==='Suspensão';
+  return motivo==='Atestado'||motivo==='Suspensão'||motivo==='Cobertura de Férias'||motivo==='Afastamento';
 }
 window.ftModalMotivoChange=function(){
   var motivo=document.getElementById('ft-modal-motivo').value;
